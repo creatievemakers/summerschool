@@ -1,1 +1,1 @@
-    # plt.show()
+indows()
