@@ -1,212 +1,50 @@
-import cv2, numpy as np, os
+import cv2
+import sys
+import math
+import numpy as np
+from matplotlib import pyplot as plt
 
-#parameters
-working_dir = './'
-cap = cv2.VideoCapture(0)
-
-org, font, scale, color, thickness, linetype = (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (234,12,123), 2, cv2.LINE_AA
-#chromakey values
-h,s,v,h1,s1,v1 = 16,0,64,123,111,187 #green
-h,s,v,h1,s1,v1 = 0,74,53,68,181,157 #skin tone
-#amount of data to use
-data_size = 1000
-#ratio of training data to test data
-training_to_test = .75
-#amount images are scaled down before being fed to keras
-img_size = 100
-#image height and width (from the webcam
-height, width = 480,640
-#returns the region of interest around the largest countour
-#the accounts for objects not being centred in the frame
-def bbox(img):
-    try:
-        bg = np.zeros((1000,1000), np.uint8)
-        bg[250:250+480, 250:250+640] = img
-        _, contours, _  = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        largest_contour = max(contours, key = cv2.contourArea)
-        rect = cv2.boundingRect(largest_contour)
-        circ = cv2.minEnclosingCircle(largest_contour)
-        x,y,w,h = rect
-        x,y = x+w/2,y+h/2
-        x,y = x+250, y+250
-        ddd = 200
-        return bg[y-ddd:y+ddd, x-ddd:x+ddd]
-    except: return img
-#finds the largest contour in a list of contours
-#returns a single contour
-def largest_contour(contours):
-    c = max(contours, key=cv2.contourArea)
-    return c[0]
-#finds the center of a contour
-#takes a single contour
-#returns (x,y) position of the contour
-def contour_center(c):
-    M = cv2.moments(c)
-    try: center = int(M['m10']/M['m00']), int(M['m01']/M['m00'])
-    except: center = 0,0
-    return center
-#takes image and range
-#returns parts of image in range
-def only_color(img, (h,s,v,h1,s1,v1)):
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    lower, upper = np.array([h,s,v]), np.array([h1,s1,v1])
-    mask = cv2.inRange(hsv, lower, upper)
-    kernel = np.ones((15,15), np.uint)
-    #mask - cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-    res = cv2.bitwise_and(img, img, mask=mask)
-    return res, mask
-def flatten(dimData, images):
-    images = np.array(images)
-    images = images.reshape(len(images), dimData)
-    images = images.astype('float32')
-    images /=255
-    return images
-#-------------get train/test data-----------------
-images, labels = [],[]
-#iterate through tools
-tool_name = ''
-patterns = []
-tool_num = 0
-while True:
-    _, img = cap.read()
-    cv2.putText(img, 'enter class name (then enter)', org, font, scale, color, thickness, linetype)
-    cv2.putText(img, 'press esc when finished', (50,100), font, scale, color, thickness, linetype)
-    cv2.putText(img, tool_name, (50,300), font, 3, (0,0,255), 5, linetype)
-    
-    cv2.line(img, (330,240), (310,240), (234,123,234), 3)
-    cv2.line(img, (320,250), (320,230), (234,123,234), 3)
-    cv2.imshow('img', img)
-    k = cv2.waitKey(1)
-    if k>10: tool_name += chr(k)
-    if k == 27: break
-    #if tool name has been entered, start collecting the data
-    current = 0
-    if k == 13:
-        while current < data_size:
-            _, img = cap.read()
-            img, mask = only_color(img, (h,s,v,h1,s1,v1))
-            mask = bbox(mask)
-            images.append(cv2.resize(mask, (img_size, img_size)))
-            labels.append(tool_num)
-            current += 1
-            cv2.line(img, (330,240), (310,240), (234,123,234), 3)
-            cv2.line(img, (320,250), (320,230), (234,123,234), 3)
-            cv2.putText(img, 'collecting data', org, font, scale, color, thickness, linetype)
-            cv2.putText(img, 'data for'+tool_name+':' + str(current), (50,100), font, scale, color, thickness, linetype)
-            #cv2.imshow('img', img)
-            cv2.imshow('img', mask)
-            k = cv2.waitKey(1)
-            if k == ord('p'): cv2.waitKey(0)
-            if current == data_size:
-                patterns.append(tool_name)
-                tool_name = ''
-                tool_num += 1
-                
-                print tool_num
-                break  
-
-#break data into training and test sets
-to_train= 0
-train_images, test_images, train_labels, test_labels = [],[],[],[]
-for image, label in zip(images, labels):
-    if to_train<3:
-        train_images.append(image)
-        train_labels.append(label)
-        to_train+=1
-    else:
-        test_images.append(image)
-        test_labels.append(label)
-        to_train = 0
-#-----------------keras time --> make the model
-from keras.utils import to_categorical
-
-#flatten data
-dataDim = np.prod(images[0].shape)
-train_data  = flatten(dataDim, train_images)
-test_data = flatten(dataDim, test_images)
-
-#change labels to categorical
-train_labels = np.array(train_labels)
-test_labels = np.array(test_labels)
-train_labels_one_hot = to_categorical(train_labels)
-test_labels_one_hot = to_categorical(test_labels)
-
-#determine the number of classes
-classes = np.unique(train_labels)
-nClasses  = len(classes)
-
-from keras.models import Sequential
-from keras.layers import Dense
-from keras.layers import Dropout
-
-model = Sequential()
-model.add(Dense(128, activation = 'relu', input_shape = (dataDim,)))
-model.add(Dropout(0.5))
-model.add(Dense(128, activation='relu'))
-model.add(Dropout(0.5))
-model.add(Dense(128, activation='relu'))
-model.add(Dropout(0.5))
-model.add(Dense(nClasses, activation='softmax'))
-
-model.compile(optimizer='rmsprop', loss='categorical_crossentropy', metrics=['accuracy'])
-history = model.fit(train_data, train_labels_one_hot, batch_size = 256, epochs=50, verbose=1,
-                    validation_data=(test_data, test_labels_one_hot))
-
-#test model
-[test_loss, test_acc] = model.evaluate(test_data, test_labels_one_hot)
-print("Evaluation result on Test Data : Loss = {}, accuracy = {}".format(test_loss, test_acc))
-
-def draw_prediction(bg,prediction, motion):
-    idxs = [1,2,3,4,5,6,7,8,9]
-    for i, pattern, idx in zip(prediction, patterns, idxs):
-        text = pattern + ' '+str(round(i,3))
-        scale = i*2
+def main():
         
-        if motion: scale = .4
-        if scale<.95: scale = .95
-        thickness = 1
-        if scale>1.5: thickness = 2
-        if scale>1.95: thickness = 4
-        scale = scale*.75
-        org, font, color = (350, idx*70), cv2.FONT_HERSHEY_SIMPLEX, (0,0,0)
-        cv2.putText(bg, text, org, font, scale, color, thickness, cv2.LINE_AA)
-    return bg
+    print("OpenCV Version: " + str(cv2.__version__) + "\n")     
 
-def draw_bg(prediction):
-    motion = False
-    bg = np.zeros((1150,1000,3), np.uint8)
-    idxs = [1,2,3,4,5,6,7,8,9]
-    for i, pattern, idx in zip(prediction, patterns, idxs):
-        text = pattern + ' '+str(round(i,3))
-        scale = i*2
-        
-        if motion: scale = .4
-        if scale<.95: scale = .95
-        thickness = 1
-        if scale>1.5: thickness = 2
-        if scale>1.95: thickness = 4
-        scale = scale*2
-        org, font, color = (200, idx*140), cv2.FONT_HERSHEY_SIMPLEX, (12,234,123)
-        cv2.putText(bg, text, org, font, scale, (255,255,255), 1+thickness, cv2.LINE_AA)
-    return bg
-from keras.models import load_model
-#model = load_model('/home/stephen/Desktop/hand_model.h5')
-dimData = np.prod([img_size, img_size])
-while True:
-    _, img= cap.read()
-    _, mask = only_color(img, (h,s,v,h1,s1,v1))
-    mask = bbox(mask)
-    mask = cv2.resize(mask, (img_size, img_size))
-    cv2.imshow('display', mask)
-    mask = mask.reshape(dimData)
-    mask = mask.astype('float32')
-    mask /=255
-    prediction = model.predict(mask.reshape(1,dimData))[0].tolist()
-    img = draw_prediction(img, prediction, False)
-    display = draw_bg(prediction)
+    # Loading image data
+    filename = "dog.jpg"
+    image = cv2.imread(filename, cv2.IMREAD_GRAYSCALE)
     
-    cv2.imshow('img', img)
-    k = cv2.waitKey(10)
-    if k == 27: break
-cap.release()
-cv2.destroyAllWindows()   
+    if image is None:
+        print("Cannot find image : " + filename)
+        sys.exit()
+
+    image_tm = np.asarray(image)
+    
+    # FFT (time domain -> frequency domain)
+    image_fq = np.fft.fft2(image_tm);
+    # IFFT (frequency domain -> time domain)
+    image_tm_inverse = np.fft.ifft2(image_fq).real;
+    
+    # Component replacement (Low-frequency components -> center)
+    image_fq_shifted = np.fft.fftshift(image_fq)
+    # Calculating magnitude spectrum
+    magnitude_spectrum = 20 * np.log(np.abs(image_fq_shifted));
+
+    # Evaluation with PSNR
+    PSNREval(image_tm, image_tm_inverse, 255)
+
+    plt.subplot(131),plt.imshow(image_tm, cmap = 'gray')
+    plt.title('Image (input)'), plt.xticks([]), plt.yticks([])
+    plt.subplot(132),plt.imshow(magnitude_spectrum, cmap = 'gray')
+    plt.title('Magnitude spectrum'), plt.xticks([]), plt.yticks([])
+    plt.subplot(133),plt.imshow(image_tm_inverse, cmap = 'gray')
+    plt.title('Image (inverse)'), plt.xticks([]), plt.yticks([])
+    plt.show()
+
+def PSNREval(image1, image2, R):
+    error = np.sum((image1.astype(float) - image2.astype(float)) ** 2)
+    MSE = error / (float(image1.shape[0] * image1.shape[1]))
+    PSNR = 10 * math.log10(255 * 255 / MSE)
+    print("MSE: " + str(MSE))
+    print("PSNR: " + str(PSNR))
+
+if __name__ == "__main__":
+    main()
